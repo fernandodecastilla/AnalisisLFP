@@ -1,3 +1,7 @@
+# ¡Importante!
+
+El documento original de la práctica está en formato HTML. Se ha transformado a formato PDF (como se indicaba en los requisitos de entrega), aunque algunos gráficos pueden aparecer cortados entre páginas.
+
 # AnalisisLFP
 
 1. Descripción del dataset: Siguiendo la línea de la práctica anterior, el dataset contiene estadísticas de todos los jugadores de la Primera División de la Liga de Fútbol Nacional. El dataset es importante porque contiene datos acumulados de los jugadores tras disputarse las 38 jornadas de la temporada 2017/2018. Se pretende resolver, al menos, una de las siguientes preguntas:
