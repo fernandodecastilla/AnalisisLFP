@@ -1,0 +1,525 @@
+---
+title: 'Práctica 2: Análisis LFP'
+author: "Fernando de Castilla"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+library(pROC) # Para graficar curvas ROC y obtener sus propiedades
+```
+
+<br><br>
+
+#### 1. Descripción del dataset. ¿Por qué es importante y qué pregunta/problema pretende resolver?
+
+<br>
+
+Siguiendo la línea de la práctica anterior, el dataset contiene estadísticas de todos los jugadores de la Primera División de la Liga de Nacional de Fútbol Profesional (LFP). En concreto, para cada jugador, se dispone de su nombre, equipo y una serie de variables numéricas: minutos jugados, tarjetas amarillas recibidas, goles anotados, fueras de juego cometidos, faltas recibidas, faltas cometidas, centros realizados, córners lanzados, entradas realizadas (existosas y fracasadas), duelos disputados, duelos cuerpo a cuerpo (exitosos, fracasados y totales), duelos aéreos (exitosos, fracasados y totales), pases (cortos, largos, al hueco y totales), tiros, tiros a puerta, asistencias de gol, regates (exitosos y fracasados) y recuperaciones de balón.
+
+El dataset es importante porque contiene datos acumulados de los jugadores tras disputarse las 38 jornadas de la temporada 2017/2018. Estos datos (que bien pueden ser integrados con otras fuentes externas) son de gran utilidad para que los clubes de fútbol puedan valorar el rendimiento de sus jugadores, a la vez que puedan compararlo con el resto de jugadores de la misma categoría. Se pretende analizar y dar respuesta a las siguientes dos preguntas:
+
+- ¿Es posible estimar los goles anotados por un futbolista a partir de otros parámetros medidos sobre el futbolista?
+
+- ¿Qué parámetros clave debe cumplir un futbolista para ser importante dentro de cualquier equipo en Primera División?
+
+<br>
+
+#### 2. Integración y selección de los datos de interés a analizar
+
+<br>
+
+ La web de la LFP ofrece estadísticas de los jugadores agrupadas por tipo (generales, disciplinarias, ofensivas, defensivas y de eficiencia). Para responder a las preguntas objeto de la práctica con la mayor certidumbre posible, es necesario integrar todos los tipos diferentes de estadísticas disponibles. Gracias a que el script desarrollado en la práctica anterior (para hacer scraping de la web de la LFP) permite configurar ciertos parámetros para obtener diferentes descargas de datos, vamos a aprovechar para extraer los datos de todos los jugadores, incluyendo todas las jornadas, y de los 5 tipos de estadísticas disponibles (5 ejecuciones diferentes del script para obtener 5 ficheros csv).
+ 
+Tras este hito, seleccionaremos los datos que consideramos relevantes para nuestro cometido, además de renombrarlos. Posteriormente, debemos verificar que todos los datos son correctos, consistentes y coherentes. Por ello, se verificarán una serie de condiciones para validar los datos.
+
+Comenzamos con el dataset de estadísticas clásicas:
+
+- Cabe destacar la corrección de la variable 'Minutos', que contiene el valor por duplicado en formato texto, separado por doble cero (por ejemplo, el valor '97900979' se corregirá por 979; y el valor '1.234001.234' se corregirá por 1234).
+
+- Seleccionamos 5 variables (dos de ellas son identificadoras del jugador).
+
+```{r integracion.clasicas}
+clasicas <- read.csv("csv/LFP_clasicas.csv", sep = ";", fileEncoding = "UTF-8", colClasses = c("Min."="character"))
+
+clasicas$Jug. <- NULL
+clasicas$X. <- NULL
+clasicas$Ent. <- NULL
+clasicas$X..1 <- NULL
+clasicas$Tit. <- NULL
+clasicas$X..2 <- NULL
+clasicas$Sust. <- NULL
+clasicas$X..3 <- NULL
+clasicas$Dob. <- NULL
+clasicas$Roj. <- NULL
+clasicas$Pen. <- NULL
+clasicas$G.P.P. <- NULL
+clasicas$Enc. <- NULL
+
+names(clasicas)[names(clasicas) == "Min."] <- "Minutos"
+names(clasicas)[names(clasicas) == "Am."] <- "T.Amarillas"
+names(clasicas)[names(clasicas) == "Gol"] <- "Goles"
+
+clasicas$Minutos <- gsub("\\.", "", clasicas$Minutos)
+clasicas$Minutos <- substring(clasicas$Minutos, nchar(clasicas$Minutos) / 2 + 2)
+clasicas$Minutos <- as.integer(clasicas$Minutos)
+
+str(clasicas)
+```
+
+En cuanto al dataset de estadísticas disciplinarias, seleccionamos 3 variables (más las dos identificadoras).
+
+```{r integracion.disciplina}
+disciplina <- read.csv("csv/LFP_disciplina.csv", sep = ";", fileEncoding = "UTF-8")
+
+disciplina[9:12] <- list(NULL)
+disciplina[3:5] <- list(NULL)
+
+names(disciplina)[names(disciplina) == "F..J."] <- "Fueras.De.Juego"
+names(disciplina)[names(disciplina) == "Faltas.R."] <- "Faltas.Recibidas"
+names(disciplina)[names(disciplina) == "Faltas.C."] <- "Faltas.Cometidas"
+
+str(disciplina)
+```
+
+En cuanto al dataset de estadísticas de eficiencia:
+
+- Seleccionamos 10 variables (más las dos identificadoras).
+
+- Transformamos en valores numéricos aquellas variables con valores superiores a 999, que incluyen el símbolo '.' como separador de las unidades de millar.
+
+- Plantemos 2 validaciones (Duelos = Duelos.Cuerpo + Duelos.Aire; Pases = Pases.Cortos + Pases.Largos + Pases.Hueco), que se cumplen sin necesidad de aplicar corrección alguna.
+
+```{r integracion.eficiencia}
+eficiencia <- read.csv("csv/LFP_eficiencia.csv", sep = ";", fileEncoding = "UTF-8",
+                       colClasses = c("Pas."="character", "P.C."="character"))
+
+eficiencia[13:19] <- list(NULL)
+
+names(eficiencia)[names(eficiencia) == "Cen."] <- "Centros"
+names(eficiencia)[names(eficiencia) == "Cor."] <- "Corners"
+names(eficiencia)[names(eficiencia) == "Ent."] <- "Entradas"
+names(eficiencia)[names(eficiencia) == "Due."] <- "Duelos"
+names(eficiencia)[names(eficiencia) == "D.C."] <- "Duelos.Cuerpo"
+names(eficiencia)[names(eficiencia) == "D.A."] <- "Duelos.Aire"
+names(eficiencia)[names(eficiencia) == "Pas."] <- "Pases"
+names(eficiencia)[names(eficiencia) == "P.C."] <- "Pases.Cortos"
+names(eficiencia)[names(eficiencia) == "P.L."] <- "Pases.Largos"
+names(eficiencia)[names(eficiencia) == "P.H."] <- "Pases.Hueco"
+
+eficiencia$Pases <- as.integer(gsub("\\.", "", eficiencia$Pases))
+eficiencia$Pases.Cortos <- as.integer(gsub("\\.", "", eficiencia$Pases.Cortos))
+
+eficiencia.val1 <- eficiencia$Duelos == eficiencia$Duelos.Cuerpo + eficiencia$Duelos.Aire
+eficiencia.val2 <- eficiencia$Pases == eficiencia$Pases.Cortos + eficiencia$Pases.Largos + eficiencia$Pases.Hueco
+summary(data.frame(eficiencia.val1, eficiencia.val2))
+
+str(eficiencia)
+```
+
+En cuanto al dataset de estadísticas ofensivas:
+
+- Seleccionamos 5 variables (más las dos identificadoras).
+
+- Plantemos 1 validación (Tiros.Puerta <= Tiros), que se cumple sin necesidad de aplicar corrección alguna.
+
+```{r integracion.ofensivas}
+ofensivas <- read.csv("csv/LFP_ofensivas.csv", sep = ";", fileEncoding = "UTF-8")
+
+ofensivas[8:16] <- list(NULL)
+
+names(ofensivas)[names(ofensivas) == "Tiros.P."] <- "Tiros.Puerta"
+names(ofensivas)[names(ofensivas) == "Asis."] <- "Asistencias"
+names(ofensivas)[names(ofensivas) == "Reg..E."] <- "Regates.Exito"
+names(ofensivas)[names(ofensivas) == "Reg..F."] <- "Regates.Fracaso"
+
+ofensivas.val1 <- ofensivas$Tiros.Puerta <= ofensivas$Tiros
+summary(data.frame(ofensivas.val1))
+
+str(ofensivas)
+```
+
+En cuanto al dataset de estadísticas defensivas, seleccionamos 7 variables (más las dos identificadoras).
+
+```{r integracion.defensivas}
+defensivas <- read.csv("csv/LFP_defensivas.csv", sep = ";", fileEncoding = "UTF-8")
+
+defensivas[9] <- NULL
+defensivas[6] <- NULL
+defensivas[3:4] <- list(NULL)
+
+names(defensivas)[names(defensivas) == "Rec."] <- "Recuperaciones"
+names(defensivas)[names(defensivas) == "Ent..E."] <- "Entradas.Exito"
+names(defensivas)[names(defensivas) == "Ent..F."] <- "Entradas.Fracaso"
+names(defensivas)[names(defensivas) == "Due..E."] <- "Duelos.Cuerpo.Exito"
+names(defensivas)[names(defensivas) == "Due..F."] <- "Duelos.Cuerpo.Fracaso"
+names(defensivas)[names(defensivas) == "Aer..E."] <- "Duelos.Aire.Exito"
+names(defensivas)[names(defensivas) == "Aer..F."] <- "Duelos.Aire.Fracaso"
+
+str(defensivas)
+```
+
+En este punto, procedemos con la integración definitiva de los 5 data frames anteriormente generados, identificando a cada jugador (registro) con los campos 'Nombre' y 'Equipo', comunes a todos ellos.
+
+```{r integraciones}
+dataset_aux1 <- merge(clasicas, disciplina, by = c("Nombre", "Equipo"))
+dataset_aux2 <- merge(dataset_aux1, eficiencia, by = c("Nombre", "Equipo"))
+dataset_aux3 <- merge(dataset_aux2, ofensivas, by = c("Nombre", "Equipo"))
+datasetLFP <- merge(dataset_aux3, defensivas, by = c("Nombre", "Equipo"))
+```
+
+Una vez consolidado el dataset definitivo 'datasetLFP', finalmente, validamos 4 condiciones generales:
+
+- Goles <= Tiros.Puerta
+- Entradas = Entradas.Exito + Entradas.Fracaso
+- Duelos.Cuerpo = Duelos.Cuerpo.Exito + Duelos.Cuerpo.Fracaso
+- Duelos.Aire = Duelos.Aire.Exito + Duelos.Aire.Fracaso
+
+Tras descubrir una minoría de registros con errores, éstos quedan solventados.
+
+```{r validaciones}
+datasetLFP.val1 <- datasetLFP$Goles <= datasetLFP$Tiros.Puerta
+datasetLFP.val2 <- datasetLFP$Entradas == datasetLFP$Entradas.Exito + datasetLFP$Entradas.Fracaso
+datasetLFP.val3 <- datasetLFP$Duelos.Cuerpo == datasetLFP$Duelos.Cuerpo.Exito + datasetLFP$Duelos.Cuerpo.Fracaso
+datasetLFP.val4 <- datasetLFP$Duelos.Aire == datasetLFP$Duelos.Aire.Exito + datasetLFP$Duelos.Aire.Fracaso
+summary(data.frame(datasetLFP.val1, datasetLFP.val2, datasetLFP.val3, datasetLFP.val4))
+
+datasetLFP$Entradas <- ifelse(datasetLFP.val2, datasetLFP$Entradas,
+                              datasetLFP$Entradas.Exito + datasetLFP$Entradas.Fracaso)
+datasetLFP.val2 <- datasetLFP$Entradas == datasetLFP$Entradas.Exito + datasetLFP$Entradas.Fracaso
+summary(data.frame(datasetLFP.val2))
+```
+
+<br>
+
+#### 3. Limpieza de los datos. ¿Los datos contienen ceros o elementos vacíos? ¿Cómo gestionarías cada uno de estos casos?
+
+<br>
+
+En primer lugar, confirmamos que los datos contienen ceros. En nuestro estudio, predominan las variables numéricas; por lo que el valor cero es totalmente válido y normal. Esto es, no debe ser tratado de ninguna manera.
+
+En cuanto a la detección de elementos vacíos, el siguiente código sirve para identificarlos:
+
+```{r limpieza.ceros_y_na}
+for(col in names(datasetLFP)){
+  vectorNA <- table(is.na(datasetLFP[, col]))
+  if(length(vectorNA) > 1)
+    cat(col, ":", vectorNA[2], "\n")
+}
+```
+
+Puesto que el código anterior no imprime nada, concluimos que no existen elementos vacíos ni nulos.
+
+Centrándonos en el análisis de valores extremos, proponemos una representación visual de diagramas de cajas por cada variable del dataset, para valorar si existen distribuciones con valores extremos. En tales casos, se valorará (mediante la consulta de datos históricos de otras temporadas) si dichos valores son posibles (reales) o no.
+
+```{r limpieza.outliers}
+par(mfrow = c(2, 5))
+for(col in names(datasetLFP))
+  if(col != "Nombre" & col != "Equipo")
+    boxplot(datasetLFP[, col], main = col)
+```
+
+En primer lugar, se aprecian ciertas similitudes entre distribuciones, lo que puede dar una idea de las posibles correlaciones existentes entre variables. Volviendo al tratamiento de valores extremos, tras apreciar que no se trata de valores numéricos disparatados, asumimos que son veraces y válidos para nuestros análisis posteriores. No obstante, dado el caso en que sea necesario plantear, por ejemplo, un modelo de regresión lineal (mínimos cuadrados), se valorará gráficamente si dichos valores extremos estuvieran perturbando la recta de regresión calculada; en cuyo caso, procederíamos a tratar dicha anomalía.
+
+<br>
+
+#### 4. Análisis de los datos. Selección de los datos, planificación, comprobación de la normalidad, comprobación de la homogeneidad de la varianza, aplicación de pruebas estadísticas (contrastes de hipótesis, correlaciones, regresiones, etc.)
+
+<br>
+
+Puesto que el objetivo de esta práctica es reponder a dos preguntas diferentes, vamos a plantear dos análisis independientes para dar respuesta a cada una de ellas.
+
+<br>
+
+**4.a. ¿Es posible estimar los goles anotados por un futbolista a partir de otros parámetros medidos sobre el futbolista?**
+
+<br>
+
+Para dar respuesta a esta pregunta, vamos a exponer la planificación de los hitos que nos hemos marcado:
+
+- Acometeremos el filtrado de aquellos jugadores que no acumulen una cantidad mínima de estadísticas que sea fiable para los posteriores estudios y análisis. En un paso posterior, mencionaremos la creación de variables ratio, por lo que este filtrado de jugadores es crucial para garantizar la fiabilidad de dichos indicadores.
+
+- Comprobaremos si las variables estadísticas de las que disponemos siguen una distribución normal (tanto a través del test Shapiro-Wilk, como visualmente mediante gráficos Cuantil-Cuantil). El hecho de no poder asumir la normalidad limita la potencia en los test de hipótesis paramétricos (precisión de los intervalos de confianza de los parámetros del modelo y los contrastes de significancia) y en los modelos de regresión (eficiencia de los estimadores mínimo-cuadráticos, al ser de mínima varianza), ademas de condicionar el coeficiente de correlación más idóneo a utilizar.
+
+- Crearemos nuevas variables agregadas. La mayoría serán ratios entre variables originales, cuyo objetivo no es otro que el de optar a incrementar la precisión del futuro modelo de regresión lineal múltiple a construir.
+
+- Una vez disponemos de todas las posibles variables candidatas para el modelo de regresión, acometeremos el estudio de la correlación de la variable a predecir (Goles) con cada una de las candidatas.
+
+- A raíz de las conclusiones del estudio de correlación anterior, construiremos una serie de modelos de regresión permutando las variables con mayor grado de correlación, evitando tomar simultáneamente en un mismo modelo las que puedan guardar correlación entre ellas mismas.
+
+- Finalmente, seleccionaremos el modelo que más se ajuste a los datos, graficaremos su recta de regresión dentro del gráfico de dispersión y plantearemos algunos ejemplos para que el modelo arroje una predicción.
+
+Comenzamos decidiendo cómo acometer el filtrado de jugadores con estadísticas poco sólidas. Para ello, tomamos la variable 'Minutos' jugados como clave para determinarlo (a más minutos jugados en liga, más fiables deben ser las estadísticas de los jugadores). Si graficamos el histograma junto con la gráfica de densidad de dicha variable, podemos apreciar que, a partir del primer cuartil de jugadores, la tendencia se estabiliza prácticamente en el máximo de densidad. Parece razonable establecer el umbral de filtrado en este punto.
+
+Comparando con el gráfico del nuevo dataset filtrado, se aprecia visualmente una mejora de la simetría en la distribución.
+
+```{r analisis1}
+# Umbral establecido en el primer cuartil de la variable 'Minutos'
+umbral1 <- 670
+datasetLFP1 <- datasetLFP[datasetLFP$Minutos > umbral1, ]
+
+par(mfrow = c(1, 2))
+hist(datasetLFP$Minutos, freq = FALSE, main = "Minutos")
+lines(density(datasetLFP$Minutos), col = "red", lty = 2, lwd = 3)
+hist(datasetLFP1$Minutos, freq = FALSE, main = "Minutos")
+lines(density(datasetLFP1$Minutos), col = "red", lty = 2, lwd = 3)
+```
+
+Abordemos el estudio de la normalidad de las variables del conjunto de datos. Aquellas variables de las que no podamos rechazar su normalidad podrán ser de mayor utilidad a la hora de construir muestro modelo. Por un lado, con los gráficos Cuantil-Cuantil se puede apreciar visualmente si las distribuciones de cada variable guardan normalidad (las muestras deben estar dispersas siguiendo una línea recta).
+
+```{r analisis1.qqplots}
+# QQ-plots
+par(mfrow = c(2, 5))
+for(col in names(datasetLFP1)){
+  if(col != "Nombre" & col != "Equipo"){
+    qqnorm(datasetLFP1[, col], main = col)
+    qqline(datasetLFP1[, col], col = "red")
+  }
+}
+```
+
+Por otro lado, el test de Shapiro-Wilk confirmará aquellas variables que no siguen una distribución normal (valor p menor que un nivel de significación igual a 0,05; lo que supone un grado de confianza mayor a un 95%).
+
+```{r analisis1.normalidad}
+# Tests Shapiro-Wilk de normalidad
+for(col in names(datasetLFP1)){
+  if(col == "Nombre")
+    cat ("Variables NO normales:\n")
+  if(is.numeric(datasetLFP1[, col])){
+    valor_p <- shapiro.test(datasetLFP1[, col])$p.value
+    if(valor_p < 0.05)
+      cat(col, "| ")
+  }
+}
+```
+
+El estudio arroja por pantalla todas las variables del dataset, por lo que no podemos suponer normalidad en ninguna de ellas. A continuación, creamos 3 nuevas variables calculadas en el dataset, tal y como mencionamos anteriormente al enumerar los hitos de la planificación propuesta (2 ratios y una acumulada).
+
+```{r analisis1.seleccion}
+datasetLFP1$Precision.Tiros <- ifelse(datasetLFP1$Tiros == 0, 0, datasetLFP1$Tiros.Puerta / datasetLFP1$Tiros)
+datasetLFP1$Regates <- datasetLFP1$Regates.Exito + datasetLFP1$Regates.Fracaso
+datasetLFP1$Precision.Regates <- ifelse(datasetLFP1$Regates == 0, 0,
+                                datasetLFP1$Regates.Exito / datasetLFP1$Regates)
+```
+
+Una vez cerrado un conjunto extenso y variado de variables, vamos a calcular el coeficiente de correlación de cada una de ellas con respecto a la variable 'Goles'. La tabla resultado estará ordenada ascendentemente por el valor p de cada correlación (de mayor a menor correlación con los goles anotados).
+
+Dado que los datos no son normales, planteamos usar el coeficiente de Spearman o el de Kendall. Debemos recurrir, nuevamente, a la naturaleza de nuestros datos para decidir el coeficiente más adecuado. Debido a que nuestras variables, en general, poseen un rango de valores enteros pequeño, sucede que existen muchos valores idénticos. Por ello, el coeficiente de Kendall será la opción ideal. Además, en comparación con el coeficiente de Spearman, se trata de un coeficiente con un menor error estándar y una menor varianza asintótica. Su inconveniente a destacar es el coste computacional (n^2 frente a n*log n de Spearman), aunque nuestra muestra no es grande y no se apreciará una diferencia significativa.
+
+```{r analisis1.correlaciones}
+valores_p <- vector()
+cols <- vector()
+for(col in names(datasetLFP1)){
+  if(is.numeric(datasetLFP1[, col])){
+    valor_p <- cor.test(datasetLFP1[, col], datasetLFP1$Goles, method = "kendall")$p.value
+    valores_p = c(valores_p, valor_p)
+    cols = c(cols, col)
+  }
+}
+
+df1 <- data.frame(cols, valores_p)
+df1 <- df1[order(valores_p),]
+rownames(df1) <- NULL
+head(df1, n = 10)
+```
+
+Una vez conocemos las variables más determinantes para estimar el número de goles anotados, vamos a plantear una batería de modelos de regresión lineal múltiple. Como adelantábamos antes, debemos aplicar un cierto criterio adicional a la hora de escoger las variables a utilizar. Por ejemplo, aquellas variables con un rango de valores más amplio dotan de mayor fiabilidad sobre la precisión de los modelos.
+
+Para comparar la calidad de los modelos, tomaremos aquel con el mayor coeficiente R^2 ajustado (indicador útil para comparar varios modelos). El modelo ganador (el tercero) contiene las siguientes variables: 'Tiros.Puerta', 'Fueras.De.Juego' y 'Duelos.Cuerpo.Fracaso'. En el detalle del modelo, podemos constatar que la variable más determinante es 'Tiros.Puerta', dado que posee el mayor coeficiente dentro de la recta de regresión (0.38). Este número son los goles que debe anotar un jugador por cada tiro a puerta; es decir, aproximadamente 1 gol por cada 3 tiros a puerta.
+
+```{r analisis1.regresion}
+goles.modelo_1 <- lm(Goles ~ Tiros.Puerta, data = datasetLFP1)
+goles.modelo_2 <- lm(Goles ~ Tiros.Puerta + Fueras.De.Juego, data = datasetLFP1)
+goles.modelo_3 <- lm(Goles ~ Tiros.Puerta + Fueras.De.Juego + Duelos.Cuerpo.Fracaso, data = datasetLFP1)
+goles.modelo_4 <- lm(Goles ~ Tiros.Puerta + Duelos.Cuerpo.Fracaso, data = datasetLFP1)
+
+modelos <- c(summary(goles.modelo_1)$adj.r.squared, summary(goles.modelo_2)$adj.r.squared,
+             summary(goles.modelo_3)$adj.r.squared, summary(goles.modelo_4)$adj.r.squared)
+
+for (i in 1:length(modelos))
+  cat("Coeficiente R^2 ajustado del modelo", i, ":", modelos[i], "\n")
+
+summary(goles.modelo_3)
+
+# Gráfica
+plot(datasetLFP1$Tiros.Puerta, datasetLFP1$Goles, xlab = "Tiros a puerta", ylab = "Goles")
+abline(goles.modelo_1)
+# Línea comentada para etiquetar cada muestra del gráfico de dispersión con el nombre del jugador
+#text(datasetLFP1$Tiros.Puerta, datasetLFP1$Goles, labels = datasetLFP1$Nombre, cex =  0.4, pos = 2)
+```
+
+La gráfica de dispersión anterior, junto con la recta de regresión obtenida, demuestran visualmente que los valores extremos no han afectado dramáticamente a su pendiente. Esto refuerza la validez de dichos valores extremos. Dado que los tiros a puerta deciden prácticamente la precisión (casi idéntica) de todos los modelos planteados, hemos tomado el modelo 1 (que sólo hace uso de esta variable) para que la gráfica pueda ser visualizada en dos dimensiones. así como fácilmente interpretable.
+
+Los dos parámetros que tienen un peso bastante menor en el modelo ganador ('Fueras.De.Juego' y 'Duelos.Cuerpo.Fracaso') quedan reflejados en los siguientes ejemplos de predicción:
+
+```{r analisis1.predicciones}
+pred1 <- predict(goles.modelo_3, data.frame(Tiros.Puerta = 19, Fueras.De.Juego = 19, Duelos.Cuerpo.Fracaso = 76))
+cat("Goles predicción 1:", pred1)
+pred2 <- predict(goles.modelo_3, data.frame(Tiros.Puerta = 19, Fueras.De.Juego = 9, Duelos.Cuerpo.Fracaso = 38))
+cat("Goles predicción 2:", pred2)
+pred3 <- predict(goles.modelo_3, data.frame(Tiros.Puerta = 38, Fueras.De.Juego = 9, Duelos.Cuerpo.Fracaso = 38))
+cat("Goles predicción 3:", pred3)
+```
+
+<br>
+
+**4.b. ¿Qué parámetros clave debe cumplir un futbolista para ser importante dentro de cualquier equipo en Primera División?**
+
+<br>
+
+Para dar respuesta a esta segunda cuestión, vamos a exponer la planificación de los hitos que nos hemos marcado:
+
+- Definiremos una nueva variable binaria para indicar si un jugador es importante o no. Para ello, haremos nuevamente uso de la variable 'Minutos', estableciendo un umbral adecuado para discernir entre ambos grupos de jugadores.
+
+- Trataremos de verificar que, tanto el conjunto de jugadores importantes como el de no importantes, contiene una proporción similar de jugadores de todos los equipos de la liga. Para garantizar que haya una representación equitativa de todos los equipos, plantearemos un test para comprobar si las distribuciones parciales de 'Minutos' disfrutados por los jugadores de cada 'Equipo' por separado son similares; así como otro test para comprobar la homogeneidad de la varianza de cada una de estas distribuciones parciales por 'Equipo'.
+
+- Acometeremos el estudio de la correlación de la variable a predecir (jugador 'Importante') con cada una de las demás variable del dataset.
+
+- A raíz de las conclusiones del estudio de correlación anterior, construiremos una batería de modelos de regresión logística permutando las variables con mayor grado de correlación.
+
+- Finalmente, seleccionaremos el modelo que mejor se ajuste a los datos, realizaremos la predicción de la variable binaria sobre todo el conjunto de datos de entrenamiento, graficaremos su curva ROC, obtendremos el área bajo dicha curva y fijaremos aquel valor umbral de decisión que minimice el número de jugadores clasificados incorrectamente en una matriz de confusión.
+
+Comenzamos decidiendo qué umbral de minutos disputados vamos a establecer para discernir si un jugador debe considerarse importante o no. Si graficamos el histograma junto con la gráfica de densidad de la variable 'Minutos', podemos apreciar que, en torno a 1900 minutos, la gráfica de densidad alcanza un mínimo local para alcanzar, poco después, su máximo absoluto. Si atendemos a la propia naturaleza del fútbol, los equipos suelen alinear a 11 jugadores titulares para cada partido y, por norma general, sólo 3 de ellos serán sustituidos habiendo disputado además la mayoría de los 90 minutos del partido. Parece razonable establecer el umbral de filtrado en este punto, que separa inequívocamente los jugadores clave en cada equipo.
+
+Una vez fijado el umbral, la variable 'Importante' tendrá el valor 0 en aquellos jugadores con menos de 1900 minutos disputados en liga. El resto de jugadores, los importantes, tendrán el valor 1.
+
+```{r analisis2}
+umbral2 <- 1900
+hist(datasetLFP1$Minutos, freq = FALSE, main = "Minutos")
+lines(density(datasetLFP1$Minutos), col = "red", lty = 2, lwd = 3)
+datasetLFP1$Importante <- ifelse(datasetLFP1$Minutos < umbral2, 0, 1)
+```
+
+Umbral establecido: `r umbral2` minutos.<br>
+Total de jugadores importantes: `r sum(datasetLFP1$Importante)` de `r length(datasetLFP1$Importante)`.<br>
+Media por equipo: `r round(sum(datasetLFP1$Importante) / 20)`.<br>
+
+Con el objeto de verificar que el grupo de jugadores importantes está representado equitativamente por todos los equipos de la liga, nos interesa comprobar que todos los grupos parciales de 'Minutos' por 'Equipo' siguen la misma distribución y sus varianzas son homogéneas.
+
+Primeramente, graficamos un diagrama de cajas para cada grupo de minutos para disponer de una representación visual de las distribuciones.
+
+En la pregunta anterior, rechazamos la normalidad de los datos, por lo que ejecutaremos pruebas no paramétricas. En la primera comprobación, aplicaremos el test de Kruskal-Wallis (para comparar la igualdad de distribuciones en más de dos muestras); en la segunda, el test de Fligner-Killeen.
+
+```{r analisis2.tests}
+boxplot(datasetLFP1$Minutos ~ datasetLFP1$Equipo, las = 2)
+kruskal.test(Minutos ~ Equipo, data = datasetLFP1)
+fligner.test(Minutos ~ Equipo, data = datasetLFP1)
+```
+
+A raíz de los resultados de los tests no paramétricos se concluye, en términos generales, la imposibilidad de asumir que los jugadores importantes (con más minutos jugados) pertenecen a un subconjunto del total des equipos de la liga, sino que en cada equipo hay jugadores importantes que, por consiguiente, disfrutan de más minutos que el resto de sus compañeros.
+
+Por tanto, podemos plantear un modelo de regresión logística fiable que, en función de ciertos datos, garantice cuándo un jugador será importante para cualquier equipo de la liga, en términos generales. Este modelo tendrá mayor validez para aquellos equipos cuyo objetivo sea mantener la categoría (no descender a Segunda División).
+
+Vamos a calcular el coeficiente de correlación de cada una de ellas con respecto a la variable 'Importancia'. La tabla resultado estará ordenada ascendentemente por el valor p de cada correlación.
+
+```{r analisis2.correlaciones}
+valores_p2 <- vector()
+cols2 <- vector()
+for(col in names(datasetLFP1)){
+  if(is.numeric(datasetLFP1[, col])){
+    valor_p <- cor.test(datasetLFP1[, col], datasetLFP1$Importante, method = "kendall")$p.value
+    valores_p2 = c(valores_p2, valor_p)
+    cols2 = c(cols2, col)
+  }
+}
+
+df2 <- data.frame(cols2, valores_p2)
+df2 <- df2[order(valores_p2),]
+rownames(df2) <- NULL
+head(df2, n = 15)
+```
+
+Una vez conocemos las variables más determinantes para estimar la importancia de un jugador, vamos a plantear una batería de modelos de regresión logística mediante permutaciones de las variables con mayor correlación.
+
+Para comparar la calidad de los modelos, tomaremos aquel con el menor valor AIC (Criterio de Información de Akaike). El modelo ganador (el octavo) contiene las siguientes variables: 'Recuperaciones', 'Pases', 'Duelos', 'Duelos.Cuerpo.Exito'.
+
+```{r analisis2.regresion_logistica}
+importante.modelo_1 <- glm(Importante ~ Recuperaciones,
+                           data = datasetLFP1, family = binomial(link = "logit"))
+importante.modelo_2 <- glm(Importante ~ Pases,
+                           data = datasetLFP1, family = binomial(link = "logit"))
+importante.modelo_3 <- glm(Importante ~ Duelos,
+                           data = datasetLFP1, family = binomial(link = "logit"))
+importante.modelo_4 <- glm(Importante ~ Recuperaciones + Pases,
+                           data = datasetLFP1, family = binomial(link = "logit"))
+importante.modelo_5 <- glm(Importante ~ Recuperaciones + Duelos,
+                           data = datasetLFP1, family = binomial(link = "logit"))
+importante.modelo_6 <- glm(Importante ~ Pases + Duelos,
+                           data = datasetLFP1, family = binomial(link = "logit"))
+importante.modelo_7 <- glm(Importante ~ Recuperaciones + Pases + Duelos,
+                           data = datasetLFP1, family = binomial(link = "logit"))
+importante.modelo_8 <- glm(Importante ~ Recuperaciones + Pases + Duelos + Duelos.Cuerpo.Exito,
+                           data = datasetLFP1, family = binomial(link = "logit"))
+
+modelos <- c(summary(importante.modelo_1)$aic, summary(importante.modelo_2)$aic,
+             summary(importante.modelo_3)$aic, summary(importante.modelo_4)$aic,
+             summary(importante.modelo_5)$aic, summary(importante.modelo_6)$aic,
+             summary(importante.modelo_7)$aic, summary(importante.modelo_8)$aic)
+
+for (i in 1:length(modelos))
+  cat("AIC del modelo", i, ":", modelos[i], "\n")
+
+summary(importante.modelo_8)
+```
+
+Finalmente, queremos calcular la precisión del modelo ganador. La curva ROC muestra la precisión del modelo, en continuo, para los diferentes umbrales de decisión. Esta curva es clave para establecer el equilibrio deseado entre la tasa de falsos positivos y falsos negativos. La disminución de una, implica el aumento de la otra. Para nuestro problema, fichar a un jugador catalogado erróneamente como importante tiene un impacto similar a no fichar un jugador catalogado erróneamente como no importante. Estamos teniendo en cuenta tanto el aspecto deportivo como el aspecto económico.
+
+El área bajo la curva ROC muestra un modelo cercano a la perfección: 0,9676 de 1. No obstante, vamos a obtener empíricamente el umbral óptimo que minimice el número de jugadores clasificados incorrectamente, para calcular la precisión del modelo sobre los propios datos de entrenamiento. Lo que obtenemos, consultando la matriz de confusión, es un nada desdeñable 91,2% de precisión en el modelo.
+
+```{r analisis2.predicciones}
+predicciones <- predict(importante.modelo_8, type = "response")
+curvaROC <- roc(datasetLFP1$Importante, predicciones)
+plot(curvaROC, col = "red")
+auc(curvaROC)
+
+# Obtención empírica del umbral óptimo que minimiza el número de jugadores clasificados incorrectamente
+umbral_importante <- 0.53
+condicion_importante <- predicciones > umbral_importante
+table(condicion_importante, datasetLFP1$Importante)
+```
+
+<br>
+
+#### 5. Representación de los resultados a partir de tablas y gráficas
+
+<br>
+
+Durante todo el desarrollo de la práctica, para facilitar el seguimiento de las tareas que se iban acometiendo, los análisis y estudios realizados se han acompañado de las tablas y/o gráficas oportunas para complementar/justificar los resultados obtenidos.
+
+<br>
+
+#### 6. Resolución del problema. ¿Cuáles son las conclusiones? ¿Los resultados permiten responder al problema?
+
+<br>
+
+En el primer problema planteado se ha planteado la construcción de un modelo de regresión lineal múltiple que estime el número de goles que anotará un jugador durante una temporada. Las variables del modelo con el mejor ajuste son los tiros a puerta, los fueras de juego y los duelos cuerpo a cuerpo fallidos. En particular, los tiros a puerta poseen el mayor peso en el modelo, otorgando 0,38 goles por cada tiro a puerta realizado. Los resultados del modelo permiten realizar estimaciones veraces sobre el número de goles de un jugador, tal y como se requería.
+
+En el segundo problema planteado se ha planteado la construcción de un modelo de regresión logística que estime la importancia de un jugador dentro de la categoría, en función de si los minutos disputados superan un umbral fijado. Las variables del modelo con el mejor ajuste son las recuperaciones de balón, pases, duelos afrontados y duelos cuerpo a cuerpo ganados. El modelo devuelve un valor decimal entre 0 y 1, indicando la probabilidad de ser considerado importante. Hemos establecido un umbral de 0,53, que minimiza los errores del modelo sobre el conjunto de todos los jugadores de la liga. Los resultados del modelo permiten estimar verazmente la importancia de un jugador, tal y como se requería.
+
+<br>
+
+#### 7. Código
+
+<br>
+
+El código utilizado en el desarrollo de la práctica se encuentra en formato .Rmd (fichero RMarkdown) en el fichero 'AnálisisLFP.Rmd'.
+
+<br>
+
+#### 8. Bibliografía
+
+<br>
+
+* Dalgaard, P. (2008). Introductory statistics with R. Springer Science & Business Media.
+
+* Test for normality – Shapiro-Wilks test (2016) [en línea]. bioSt@TS. [Consulta: 2 de junio de 2018] https://biostats.w.uib.no/test-for-normality-shapiro-wilks-test/
+
+* Comparing two variances – Fisher’s F test (2016) [en línea]. bioSt@TS. [Consulta: 2 de junio de 2018] https://biostats.w.uib.no/1-comparing-two-variances/
+
+* Análisis de Normalidad: gráficos y contrastes de hipótesis (2016) [en línea]. [Consulta: 2 de junio de 2018] https://rpubs.com/Joaquin_AR/218465
+
+* Análisis de la homogeneidad de varianza (homocedasticidad) (2016) [en línea]. [Consulta: 2 de junio de 2018] https://rpubs.com/Joaquin_AR/218466
+
+* No todo es normal - Manejo de datos no normales (2018) [en línea]. [Consulta: 2 de junio de 2018] https://anestesiar.org/2015/no-todo-es-normal-manejo-de-datos-no-normales/
+
+* Test for homogeneity of variances - Lavene’s test and the Fligner Killeen test (2016) [en línea]. bioSt@TS. [Consulta: 2 de junio de 2018] https://biostats.w.uib.no/test-for-homogeneity-of-variances-levenes-test/
